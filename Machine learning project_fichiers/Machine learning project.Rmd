@@ -1,0 +1,145 @@
+---
+title: "Machine learning project"
+author: "Damien Chevalier"
+date: "21 août 2015"
+---
+
+Overview : 6 participants were asked to perform barbell lifts correctly and incorrectly in 5 different waysgoal. The aim is to use data from accelerometers on the belt, forearm, arm, and dumbell to predict (with machine learning) which exercice they are doing and if they are doing it well.
+
+## 1) Load the data and first study and cleaning
+
+```{r, warning=FALSE, message=FALSE}
+library(caret)
+library(randomForest)
+library(gbm)
+```
+
+```{r, warning=FALSE, cache=TRUE, message=FALSE}
+pml<- read.csv("pml-training.csv",header = TRUE, sep = ";", stringsAsFactors = TRUE, dec = ".", na.strings=c("NA", ""))
+```
+
+We can see with  the str() or summary() function that we get 19119 test and that several columns are without interest.
+
+I decide to suppress
+- suppress column whith lots of NA or empty data
+- suppress the time elements (ie : 7 first column) because our data are not time series (each row is a test)
+
+```{r}
+Nacol<-apply(pml,2,function(x) sum(is.na(x)))
+pml1<-pml[,Nacol[]==0]
+pml1<-pml1[,8:ncol(pml1)]
+```
+
+## 2) Preprocessing first on a small part
+
+I choose to create fist a small training fold (10%) in order to test the best algorithm. In a second time, I will run again the algorithm on higer part (70%)
+
+```{r}
+inTrain<-createDataPartition(y=pml1$classe, p=0.1, list = FALSE)
+training<-pml1[inTrain,]
+testing<-pml1[-inTrain,]
+```
+
+Then I check the covariance between predictors in order to supress redondant variables
+
+```{r}
+nsv<-nearZeroVar(training,saveMetrics=TRUE)
+```
+
+After study no redondant variables appears.
+
+## 3) Modelling
+I don't use the linear modelling because we have to predict factor variable (A,B,C,D,E,F)
+
+3.1) Attempt with trees
+```{r,cache=TRUE, message=FALSE, warning=FALSE}
+modfit1<-train(classe ~., method = "rpart", data = training)
+confusionMatrix(testing$classe,predict(modfit1,testing))
+```
+
+
+3.2) Attempt with bagging
+```{r, cache=TRUE, message=FALSE, warning=FALSE}
+fitControl2 <- trainControl(method = "repeatedcv",number = 10,repeats = 25)
+modfit2<-train(classe ~., method = "treebag", data = training, trcontrol = fitControl2)
+confusionMatrix(testing$classe,predict(modfit2,testing))
+```
+
+3.3) Attempt with randomforest
+```{r, cache=TRUE,message=FALSE, warning=FALSE}
+set.seed(25)
+modfit4<-randomForest(classe ~., data = training, ntree = 100, mtry = 35 )
+confusionMatrix(testing$classe,predict(modfit4,testing))
+```
+
+The accuracy is excellent at this point and the calcul time is short (<1s)
+
+3.4) Attempt with boosting
+```{r, cache=TRUE, message=FALSE, warning=FALSE}
+gbm1<-gbm(classe~., data = training, n.trees =  100, cv.folds = 30, distribution = "multinomial")
+best.iter <- gbm.perf(gbm1,method="cv")
+
+pred<-predict(gbm1, testing, best.iter ,type='response')
+pred_class <- apply(pred, 1, which.max)
+pred_class[pred_class==1]<-"A"
+pred_class[pred_class==2]<-"B"
+pred_class[pred_class==3]<-"C"
+pred_class[pred_class==4]<-"D"
+pred_class[pred_class==5]<-"E"
+
+confusionMatrix(testing$classe,pred_class)
+```
+
+Conclusion of accuracy
+
+- Trees : 0.48
+
+- Bagging : 0.93
+
+- RandomForest : 0.94
+
+- Boosting : 0.5
+
+To conclude the best model to developp is Randomforest
+
+# 3) Random forest study
+
+We extend the study by enlarging the training file and increasing the number of trees
+
+```{r, cache=TRUE, message=FALSE, warning=FALSE}
+inTrain2<-createDataPartition(y=pml1$classe, p=0.7, list = FALSE)
+training2<-pml1[inTrain2,]
+testing2<-pml1[-inTrain2,]
+
+set.seed(25)
+modfit5<-randomForest(classe ~., data = training2, ntree = 1000, mtry = 35 )
+confusionMatrix(testing2$classe,predict(modfit5,testing2))
+```
+
+The selection of random  forest algorithm show no need to perform a cross validation (it's include in the algorithm)
+
+Finaly we get an accuracy of 99.3% which is very good for this type of exercise
+
+# 4) final test on the 20 samples
+
+We use the same preprocessing as the training test set (suppression of columns) and use the predict function on the final model (modfit5)
+
+```{r, message=FALSE, warning=FALSE}
+pmltest<- read.csv("pml-testing.csv",header = TRUE, sep = ",", stringsAsFactors = TRUE, dec = ".", na.strings=c("NA", ""))
+pmltest2<-pmltest[,Nacol[]==0]
+pmltest2<-pmltest2[,8:ncol(pmltest2)]
+
+answers<-predict(modfit5,pmltest2)
+
+pml_write_files = function(x){
+        n = length(x)
+        for(i in 1:n){
+                filename = paste0("problem_id_",i,".txt")
+                write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
+        }
+}
+pml_write_files(answers)
+
+```
+
+20/20 on assessment !
